@@ -58,6 +58,7 @@
         const CheckCircle = () => <Icon><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" /></Icon>;
         const AlertOctagon = () => <Icon><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></Icon>;
         const DownloadIcon = () => <Icon><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></Icon>;
+        const Paperclip = () => <Icon><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></Icon>;
 
         // --- 메인 컴포넌트 ---
         const BlacklistManager = () => {
@@ -76,7 +77,7 @@
                 joinStatus: '',
                 language: '',
                 reasonText: '',
-                files: [] // { name: string, data: base64 }
+                files: [] // { name: string, data: base64 } 배열
             });
 
             const [pasteText, setPasteText] = useState('');
@@ -94,7 +95,7 @@
                 return auth.onAuthStateChanged(setUser);
             }, []);
 
-            // 데이터 로드
+            // 데이터 로드 (Firestore)
             useEffect(() => {
                 if (!user) return;
                 const collectionRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('blacklist');
@@ -104,50 +105,52 @@
                     snapshot.forEach((doc) => {
                         items.push({ id: doc.id, ...doc.data() });
                     });
+                    // 최신 등록순 정렬
                     items.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
                     setList(items);
                 });
             }, [user]);
 
-            // 스마트 붙여넣기 로직 (개선됨)
+            // 스마트 붙여넣기 로직 (닉네임 첫줄 + 불필요 항목 제거)
             const handleSmartPaste = () => {
                 if (!pasteText.trim()) return;
 
                 let parsedData = { ...formData };
                 let textToParse = pasteText.trim();
 
-                // 1. 닉네임 추출 (첫 줄)
+                // 1. 줄 단위로 분리하여 첫 줄(닉네임) 처리
                 const lines = textToParse.split(/\r\n|\n|\r/);
+                
                 if (lines.length > 0) {
                     const firstLine = lines[0].trim();
-                    // 첫 줄이 키워드로 시작하지 않으면 닉네임으로 간주
+                    // 첫 줄이 '사용자 ID'로 시작하지 않으면 닉네임으로 간주
                     if (firstLine && !firstLine.startsWith("사용자 ID")) {
                         parsedData.nickname = firstLine;
-                        // 닉네임 줄 제외하고 나머지 텍스트 다시 합침 (줄바꿈 유지 안해도 되지만 검색을 위해)
-                        // 실제로는 한줄로 붙어있는 경우도 있으므로, 첫줄만 제거하고 나머지는 raw text로 처리
-                        textToParse = lines.slice(1).join(''); // 줄바꿈 제거하고 한줄로 합침 (키워드 검색 용이)
+                        // 첫 줄 제외하고 나머지는 한 줄로 합쳐서 키워드 파싱 준비
+                        textToParse = lines.slice(1).join(''); 
                     } else {
                         textToParse = lines.join('');
                     }
                 }
 
-                // 2. 정밀 파싱을 위한 전체 키워드 정의 (순서 중요)
-                // field가 null인 것은 추출하지만 저장하지 않을 데이터 (Delimiters)
+                // 2. 정밀 파싱을 위한 전체 키워드 정의
+                // field가 null인 것은 데이터를 추출하지 않고 건너뛰기 위한 구분자
                 const keys = [
                     { key: "사용자 ID", field: "userId" },
-                    { key: "최근 활동 일시", field: null },
+                    { key: "최근 활동 일시", field: null }, 
                     { key: "앱 첫 로그인", field: null },
                     { key: "휴대폰 번호", field: null },
                     { key: "이메일", field: "email" },
                     { key: "지갑 주소", field: null },
                     { key: "가입 일시", field: "joinDate" },
                     { key: "가입 방법", field: "joinMethod" },
-                    { key: "가입 상태(초대자)", field: "joinStatus" },
+                    { key: "가입 상태(초대자)", field: "joinStatus" }, 
                     { key: "레벨", field: null },
                     { key: "최초 접속 언어", field: null },
                     { key: "설정 언어", field: "language" }
                 ];
 
+                // 3. 키워드 기반 값 추출
                 for (let i = 0; i < keys.length; i++) {
                     const curr = keys[i];
                     const next = keys[i+1];
@@ -160,25 +163,31 @@
 
                     if (next) {
                         const endIdx = textToParse.indexOf(next.key);
+                        // 다음 키워드가 존재하고, 현재 키워드 뒤에 있다면 그 사이 문자열 추출
                         if (endIdx !== -1 && endIdx > valStart) {
                             val = textToParse.substring(valStart, endIdx);
                         } else {
-                            // 다음 키를 못 찾았으면 그냥 끝까지 (혹은 다음 루프에서 처리)
+                            // 다음 키워드를 못 찾았으면 끝까지
                             val = textToParse.substring(valStart);
                         }
                     } else {
-                        // 마지막 키인 경우
+                        // 마지막 키워드인 경우
                         val = textToParse.substring(valStart);
                     }
 
-                    // field가 있는 경우만 저장
+                    // field가 있는 경우만 저장 (불필요 항목 제거됨)
                     if (curr.field) {
                         parsedData[curr.field] = val.trim();
                     }
                 }
 
+                // 안전장치: 닉네임이 텍스트에 없었지만 사용자 ID가 있다면 임시 생성
+                if (!parsedData.nickname && parsedData.userId) {
+                    parsedData.nickname = "User_" + parsedData.userId.substring(0, 5);
+                }
+
                 setFormData(parsedData);
-                alert("필요한 정보만 추출하여 입력되었습니다.");
+                alert("회원 정보가 자동으로 입력되었습니다.");
                 setPasteText(""); 
             };
 
@@ -200,6 +209,7 @@
                     });
                     
                     alert("블랙리스트에 등록되었습니다.");
+                    // 초기화
                     setFormData({
                         nickname: '', userId: '', email: '', joinDate: '', joinMethod: '', 
                         joinStatus: '', language: '', reasonText: '', files: []
@@ -207,12 +217,13 @@
                     setStep(1);
                 } catch (e) {
                     console.error(e);
-                    alert("등록 중 오류가 발생했습니다.");
+                    alert("등록 중 오류가 발생했습니다 (파일 크기 제한 등).");
                 } finally {
                     setLoading(false);
                 }
             };
 
+            // 다중 파일 처리 로직
             const handleFileChange = async (e) => {
                 if (e.target.files) {
                     const fileList = Array.from(e.target.files);
@@ -222,13 +233,14 @@
                             reader.onloadend = () => {
                                 resolve({
                                     name: file.name,
-                                    data: reader.result 
+                                    data: reader.result // Base64 Data
                                 });
                             };
                             reader.readAsDataURL(file);
                         });
                     });
                     const fileObjects = await Promise.all(readPromises);
+                    // 기존 파일에 추가하는 방식이 아니라 교체하는 방식 (필요시 [...prev, ...new] 로 변경 가능)
                     setFormData({ ...formData, files: fileObjects });
                 }
             };
@@ -253,17 +265,19 @@
                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                             {/* 왼쪽: 입력 폼 */}
                             <div className="lg:col-span-1 space-y-6">
-                                {/* Step 1 */}
+                                {/* Step 1: 회원 정보 */}
                                 <div className={`bg-white p-6 rounded-xl shadow-sm border ${step === 1 ? 'border-blue-500 ring-2 ring-blue-100' : 'border-gray-200'}`}>
                                     <div className="flex items-center justify-between mb-4">
                                         <h2 className="text-lg font-bold text-gray-700">1. 회원 정보</h2>
                                         {step > 1 && <button onClick={() => setStep(1)} className="text-xs text-blue-600 hover:underline">수정하기</button>}
                                     </div>
                                     <div className="space-y-3 text-sm">
+                                        {/* 1순위: 닉네임 */}
                                         <div>
                                             <label className="block text-gray-500 mb-1">닉네임 <span className="text-red-500">*</span></label>
                                             <input type="text" className="w-full p-2 border rounded bg-gray-50 font-bold text-gray-800" value={formData.nickname} onChange={(e) => setFormData({...formData, nickname: e.target.value})} placeholder="닉네임" disabled={step !== 1}/>
                                         </div>
+                                        {/* 2순위: 사용자 ID */}
                                         <div>
                                             <label className="block text-gray-500 mb-1">사용자 ID <span className="text-red-500">*</span></label>
                                             <input type="text" className="w-full p-2 border rounded bg-gray-50" value={formData.userId} onChange={(e) => setFormData({...formData, userId: e.target.value})} placeholder="U0P..." disabled={step !== 1}/>
@@ -284,22 +298,22 @@
                                     </div>
                                 </div>
 
-                                {/* 스마트 붙여넣기 */}
+                                {/* 스마트 붙여넣기 (Step 1) */}
                                 {step === 1 && (
                                     <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
                                         <h3 className="text-sm font-bold text-blue-800 mb-2 flex items-center gap-2"><Clipboard className="w-4 h-4" />회원 정보 복사해넣기</h3>
-                                        <div className="text-xs text-blue-600 mb-2">* 1번 줄: 닉네임 / 이후: 상세 정보 (필요정보만 추출)</div>
+                                        <div className="text-xs text-blue-600 mb-2">* 1번 줄: 닉네임 / 이후: 상세 정보 (필요 정보만 추출)</div>
                                         <textarea className="w-full p-2 text-xs border border-blue-200 rounded bg-white h-24 resize-none focus:outline-none focus:border-blue-400" placeholder="관리자 페이지의 텍스트를 그대로 붙여넣으세요." value={pasteText} onChange={(e) => setPasteText(e.target.value)}></textarea>
                                         <button onClick={handleSmartPaste} className="w-full mt-2 py-1.5 bg-blue-200 text-blue-800 rounded text-xs font-bold hover:bg-blue-300 transition">정보 자동 채우기</button>
                                     </div>
                                 )}
 
-                                {/* 확인 버튼 */}
+                                {/* 확인 버튼 (Step 1) */}
                                 {step === 1 && (
                                     <button onClick={handleNextStep} className="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-bold shadow-md">확인 및 다음 단계</button>
                                 )}
 
-                                {/* Step 2 */}
+                                {/* Step 2: 사유 및 파일 */}
                                 {step === 2 && (
                                     <div className="bg-white p-6 rounded-xl shadow-sm border border-red-200 ring-2 ring-red-50 animate-fade-in">
                                         <h2 className="text-lg font-bold text-red-700 mb-4">2. 블랙리스트 등록 사유</h2>
@@ -314,7 +328,11 @@
                                                 {formData.files.length > 0 && (
                                                     <div className="mt-2 text-xs text-gray-600 bg-gray-50 p-2 rounded border border-gray-200">
                                                         <p className="font-bold mb-1">첨부 대기중 ({formData.files.length}개):</p>
-                                                        <ul className="list-disc list-inside space-y-0.5">{formData.files.map((f, i) => <li key={i} className="truncate">{f.name}</li>)}</ul>
+                                                        <ul className="list-disc list-inside space-y-0.5">
+                                                            {formData.files.map((f, i) => (
+                                                                <li key={i} className="truncate">{f.name}</li>
+                                                            ))}
+                                                        </ul>
                                                     </div>
                                                 )}
                                             </div>
