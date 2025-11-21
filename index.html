@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>포인트 자산 관리장 (이상 거래 탐지)</title>
+    <title>포인트 자산 관리장 (스마트 파싱)</title>
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -17,7 +17,6 @@
 
     <style>
         body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif; }
-        /* 스크롤 이동 시 강조 효과 애니메이션 */
         @keyframes highlight-pulse {
             0%, 100% { background-color: rgb(254 226 226); } /* red-100 */
             50% { background-color: rgb(252 165 165); } /* red-300 */
@@ -50,33 +49,18 @@
         const Trash2 = (props) => (<IconBase {...props}><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></IconBase>);
         const AlertTriangle = (props) => (<IconBase {...props}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></IconBase>);
 
-        // --- 메인 컴포넌트 ---
         const UnifiedPointDashboard = () => {
             const [data, setData] = useState([]);
             const [abnormalList, setAbnormalList] = useState([]);
 
-            // 초기 샘플 데이터 (테스트용)
             const initialSampleData = [
-                { id: 'UVHS3G0LP', name: 'goblin', date: '2025-11-20 03:34:33', type: 'Heart', amount: 300, category: '지급', adminMsg: '11+', additionalDesc: 'Berhasil Menyerang Blok' },
-                
-                // [정상] 하트 지출(-5000) : 트로피 획득(500) => 10:1 비율 OK
-                { id: 'UVHS3G0LP', name: 'goblin', date: '2025-11-20 04:00:00', type: 'Heart', amount: -5000, category: '사용', adminMsg: 'Penukaran Poin', additionalDesc: '정상 교환' },
-                { id: 'UVHS3G0LP', name: 'goblin', date: '2025-11-20 04:00:00', type: 'Trophy', amount: 500, category: '지급', adminMsg: '수령: Penukaran Poin', additionalDesc: '정상 교환' },
-                
-                // [비정상] 트로피 지출(-10) : 하트 획득(50) => 1:7 비율 위반 (정상은 70이어야 함)
-                { id: 'UVHS3G0LP', name: 'goblin', date: '2025-11-20 05:00:00', type: 'Heart', amount: 50, category: '지급', adminMsg: '수령: Penukaran Poin', additionalDesc: '비정상 교환(비율깨짐)' },
-                { id: 'UVHS3G0LP', name: 'goblin', date: '2025-11-20 05:00:00', type: 'Trophy', amount: -10, category: '사용', adminMsg: 'Penukaran Poin', additionalDesc: '비정상 교환' },
-
-                // [비정상] 하트 지출(-100) : 트로피 획득(100) => 10:1 비율 위반 (정상은 10이어야 함)
-                { id: 'UVHS3G0LP', name: 'goblin', date: '2025-11-20 06:00:00', type: 'Heart', amount: -100, category: '사용', adminMsg: 'Exchange', additionalDesc: '비정상' },
-                { id: 'UVHS3G0LP', name: 'goblin', date: '2025-11-20 06:00:00', type: 'Trophy', amount: 100, category: '지급', adminMsg: 'Exchange', additionalDesc: '비정상' },
+                { id: 'S1', name: 'tester', date: '2025-11-20 03:34:33', type: 'Heart', amount: 300, category: '지급', adminMsg: '11+', additionalDesc: '샘플' },
             ];
 
             useEffect(() => {
-                processAndSetData(initialSampleData);
+                // 초기에는 데이터 없음 (파일 업로드 유도)
             }, []);
 
-            // 잔액 계산 (시간순)
             const calculateBalances = (rows) => {
                 const sortedAsc = [...rows].sort((a, b) => new Date(a.date) - new Date(b.date));
                 let hBalance = 0;
@@ -92,7 +76,6 @@
                 });
             };
 
-            // 핵심 그룹핑 & 비정상 비율 검증 로직
             const identifyPairs = (rows) => {
                 const result = [];
                 const pairKeywords = ['penukaran', 'exchange', '교환'];
@@ -101,58 +84,41 @@
                 while (i < rows.length) {
                     const current = rows[i];
                     const next = rows[i + 1];
-
                     let isPaired = false;
 
                     if (next) {
-                        // 1. 키워드 검증
                         const currText = (current.adminMsg + (current.additionalDesc || '')).toLowerCase().replace(/\s+/g, '');
                         const nextText = (next.adminMsg + (next.additionalDesc || '')).toLowerCase().replace(/\s+/g, '');
                         
                         const hasKeyword = pairKeywords.some(k => currText.includes(k)) && pairKeywords.some(k => nextText.includes(k));
-
-                        // 2. 반대 부호 검증
                         const isOpposite = (current.amount > 0 && next.amount < 0) || (current.amount < 0 && next.amount > 0);
-
-                        // 3. 지출/획득 행 식별
+                        
                         const expenseRow = current.amount < 0 ? current : next;
                         const incomeRow = current.amount > 0 ? current : next;
                         
-                        // 4. 타입 교차 검증
                         const isValidPairType = 
                             (expenseRow.type === 'Heart' && incomeRow.type === 'Trophy') ||
                             (expenseRow.type === 'Trophy' && incomeRow.type === 'Heart');
 
                         if (hasKeyword && isOpposite && isValidPairType) {
-                            // --- 비율 검증 로직 추가 ---
                             let isAbnormal = false;
                             const expenseAmt = Math.abs(expenseRow.amount);
                             const incomeAmt = incomeRow.amount;
 
                             if (expenseRow.type === 'Heart' && incomeRow.type === 'Trophy') {
-                                // Rule: Heart 10개 지출 -> Trophy 1개 획득 (10:1)
-                                // 즉, Heart 지출량 == Trophy 획득량 * 10
-                                if (expenseAmt !== incomeAmt * 10) {
-                                    isAbnormal = true;
-                                }
+                                // 10:1 비율 (Heart 10 -> Trophy 1)
+                                if (expenseAmt !== incomeAmt * 10) isAbnormal = true;
                             } else if (expenseRow.type === 'Trophy' && incomeRow.type === 'Heart') {
-                                // Rule: Trophy 1개 지출 -> Heart 7개 획득 (1:7)
-                                // 즉, Heart 획득량 == Trophy 지출량 * 7
-                                if (incomeAmt !== expenseAmt * 7) {
-                                    isAbnormal = true;
-                                }
+                                // 1:7 비율 (Trophy 1 -> Heart 7)
+                                if (incomeAmt !== expenseAmt * 7) isAbnormal = true;
                             }
 
-                            // 짝이 맞으면 지출(위), 획득(아래)로 정렬해서 추가
-                            // isAbnormal 플래그 전파
                             result.push({ ...expenseRow, groupPos: 'top', isAbnormal });
                             result.push({ ...incomeRow, groupPos: 'bottom', isAbnormal });
-                            
                             isPaired = true;
                             i += 2; 
                         }
                     }
-
                     if (!isPaired) {
                         result.push({ ...current, groupPos: null });
                         i++;
@@ -163,15 +129,9 @@
 
             const processAndSetData = (rawData) => {
                 const calculatedData = calculateBalances(rawData);
-                
-                const sorted = [...calculatedData].sort((a, b) => {
-                    return new Date(a.date) - new Date(b.date);
-                });
-
+                const sorted = [...calculatedData].sort((a, b) => new Date(a.date) - new Date(b.date));
                 const groupedData = identifyPairs(sorted);
                 setData(groupedData);
-
-                // 비정상 내역 리스트 추출 (지출 행만 대표로 추출)
                 const abnormals = groupedData.filter(d => d.groupPos === 'top' && d.isAbnormal);
                 setAbnormalList(abnormals);
             };
@@ -181,16 +141,18 @@
                 setAbnormalList([]);
             };
 
-            // 스크롤 이동 함수
             const scrollToRow = (idx) => {
                 const element = document.getElementById(`row-${idx}`);
                 if (element) {
                     element.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     element.classList.add('highlight-row');
-                    setTimeout(() => {
-                        element.classList.remove('highlight-row');
-                    }, 3000);
+                    setTimeout(() => element.classList.remove('highlight-row'), 3000);
                 }
+            };
+
+            const cleanCell = (val) => {
+                if (!val) return "";
+                return val.replace(/^"|"$/g, '').trim();
             };
 
             const handleFileUpload = (event) => {
@@ -202,19 +164,39 @@
                     const reader = new FileReader();
                     reader.onload = (e) => {
                         const text = e.target.result;
-                        const rows = text.split(/\r\n|\n|\r/).slice(1); 
+                        const allLines = text.split(/\r\n|\n|\r/);
+                        
+                        const headerLine = allLines[0];
+                        const headerCols = headerLine.split(',').map(cleanCell);
+                        
+                        const idxMap = {
+                            id: headerCols.indexOf('사용자 ID'),
+                            name: headerCols.indexOf('사용자 이름'),
+                            date: headerCols.indexOf('발생 일시'),
+                            type: headerCols.indexOf('포인트 이름'),
+                            amount: headerCols.indexOf('수량/금액'),
+                            category: headerCols.indexOf('내역 구분'),
+                            adminMsg: headerCols.indexOf('관리자 메시지'),
+                            desc: headerCols.indexOf('부가 설명')
+                        };
+
+                        const rows = allLines.slice(1);
                         
                         rows.forEach(row => {
                             if (!row.trim()) return;
-                            const cols = row.split(',').map(c => c.trim());
+                            const cols = row.split(',').map(cleanCell);
                             if (cols.length < 5) return;
 
-                            const date = cols[2];
-                            const typeRaw = (cols[3] || '').trim();
-                            const amountRaw = parseFloat(cols[5]);
-                            const categoryRaw = cols[6];
-                            const adminMsgRaw = cols[8] || '';
-                            const additionalDescRaw = cols[9] || '';
+                            const date = idxMap.date > -1 ? cols[idxMap.date] : "";
+                            const amountRaw = idxMap.amount > -1 ? parseFloat(cols[idxMap.amount]) : 0;
+                            const categoryRaw = idxMap.category > -1 ? cols[idxMap.category] : "";
+                            const adminMsgRaw = idxMap.adminMsg > -1 ? cols[idxMap.adminMsg] : "";
+                            const additionalDescRaw = idxMap.desc > -1 ? cols[idxMap.desc] : "";
+                            
+                            let typeRaw = "";
+                            if (idxMap.type > -1) {
+                                typeRaw = cols[idxMap.type];
+                            }
 
                             let normalizedType = 'Unknown';
                             if (typeRaw.includes('Heart')) normalizedType = 'Heart';
@@ -227,8 +209,8 @@
                             }
 
                             newRows.push({
-                                id: cols[0],
-                                name: cols[1],
+                                id: idxMap.id > -1 ? cols[idxMap.id] : "",
+                                name: idxMap.name > -1 ? cols[idxMap.name] : "",
                                 date: date,
                                 type: normalizedType,
                                 amount: amountRaw,
@@ -256,40 +238,8 @@
             return (
                 <div className="p-6 max-w-7xl mx-auto bg-gray-50 min-h-screen font-sans text-gray-800">
                     
-                    {/* 비정상 거래 감지 배너 */}
-                    {abnormalList.length > 0 && (
-                        <div className="mb-6 bg-red-50 border border-red-200 rounded-xl p-4 animate-pulse-slow">
-                            <div className="flex items-center gap-2 mb-3 text-red-700 font-bold">
-                                <AlertTriangle className="w-6 h-6" />
-                                <span>비정상 교환 비율 감지됨 ({abnormalList.length}건)</span>
-                            </div>
-                            <div className="space-y-2 max-h-40 overflow-y-auto pr-2">
-                                {abnormalList.map((item, i) => {
-                                    // 해당 아이템의 인덱스를 전체 데이터에서 찾기
-                                    const realIdx = data.findIndex(d => d === item);
-                                    return (
-                                        <button 
-                                            key={i}
-                                            onClick={() => scrollToRow(realIdx)}
-                                            className="w-full text-left flex items-center justify-between p-2 bg-white rounded border border-red-100 hover:bg-red-100 transition text-sm"
-                                        >
-                                            <span className="flex items-center gap-2">
-                                                <span className="font-mono text-gray-500">{item.date}</span>
-                                                <span className="font-medium text-gray-700">
-                                                    {item.type === 'Heart' ? 'Heart' : 'Trophy'} 지출
-                                                    <span className="mx-1 text-gray-400">-></span>
-                                                    획득 비율 오류
-                                                </span>
-                                            </span>
-                                            <span className="text-xs text-blue-600 font-medium">이동 &rarr;</span>
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    )}
-
-                    <div className="mb-8 bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                    {/* 1. 포인트 자산 관리장 헤더 */}
+                    <div className="mb-6 bg-white p-6 rounded-xl shadow-sm border border-gray-200">
                         <h1 className="text-2xl font-bold mb-2 flex items-center gap-2 text-gray-800">
                             <Calculator className="w-6 h-6 text-blue-600" />
                             포인트 자산 관리장
@@ -297,8 +247,8 @@
                         <div className="flex justify-between items-end">
                             <div className="text-gray-500 text-sm space-y-1">
                                 <p>정렬 기준: <strong>과거 → 현재 (오름차순) 고정</strong></p>
-                                <p>교환 규칙: <strong>Heart 10 : 1 Trophy</strong> | <strong>Trophy 1 : 7 Heart</strong></p>
-                                <p className="text-xs text-gray-400">* 그룹핑 및 비정상 비율 자동 감지</p>
+                                <p>자동 그룹핑: <strong>두 행 모두 교환(Penukaran) 내용 포함 시</strong> [지출(위) - 획득(아래)] 묶음</p>
+                                <p className="text-xs text-gray-400">* 파싱 방식: CSV 헤더 제목 기반 자동 인식 (열 삭제/이동 대응)</p>
                             </div>
                         </div>
 
@@ -322,7 +272,7 @@
                         </div>
                     </div>
 
-                    {/* 데이터 요약 카드 */}
+                    {/* 2. 데이터 요약 카드 (위치 이동됨: 헤더 바로 아래) */}
                     {data.length > 0 && (
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                             <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center">
@@ -353,6 +303,32 @@
                         </div>
                     )}
 
+                    {/* 3. 비정상 거래 감지 배너 (위치 이동됨: 요약 카드 아래) */}
+                    {abnormalList.length > 0 && (
+                        <div className="mb-6 bg-red-50 border border-red-200 rounded-xl p-4 animate-pulse-slow">
+                            <div className="flex items-center gap-2 mb-3 text-red-700 font-bold">
+                                <AlertTriangle className="w-6 h-6" />
+                                <span>비정상 교환 비율 감지됨 ({abnormalList.length}건)</span>
+                            </div>
+                            <div className="space-y-2 max-h-40 overflow-y-auto pr-2">
+                                {abnormalList.map((item, i) => {
+                                    const realIdx = data.findIndex(d => d === item);
+                                    return (
+                                        <button key={i} onClick={() => scrollToRow(realIdx)} className="w-full text-left flex items-center justify-between p-2 bg-white rounded border border-red-100 hover:bg-red-100 transition text-sm">
+                                            <span className="flex items-center gap-2">
+                                                <span className="font-mono text-gray-500">{item.date}</span>
+                                                <span className="font-medium text-gray-700">
+                                                    {item.type === 'Heart' ? 'Heart' : 'Trophy'} 지출 <span className="mx-1 text-gray-400">-></span> 획득 비율 오류
+                                                </span>
+                                            </span>
+                                            <span className="text-xs text-blue-600 font-medium">이동 &rarr;</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
                     {/* 테이블 영역 */}
                     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                         <div className="overflow-x-auto">
@@ -369,7 +345,7 @@
                                 </thead>
                                 <tbody className="divide-y divide-gray-100">
                                     {data.length === 0 ? (
-                                        <tr><td colSpan="6" className="text-center py-20 text-gray-400">데이터가 없습니다.</td></tr>
+                                        <tr><td colSpan="6" className="text-center py-20 text-gray-400">데이터가 없습니다. 파일을 업로드해주세요.</td></tr>
                                     ) : (
                                         data.map((row, idx) => {
                                             const isIncome = row.amount > 0;
@@ -379,15 +355,12 @@
                                             if (row.type === 'Heart') cellClass = "bg-pink-100 text-pink-900 font-medium";
                                             else if (row.type === 'Trophy') cellClass = "bg-yellow-100 text-yellow-800 font-medium";
 
-                                            // 그룹핑 및 비정상 거래 스타일링
                                             let rowStyle = "hover:bg-gray-50 transition-colors";
                                             let groupIndicator = null;
                                             
-                                            // 비정상 거래일 경우 붉은 테두리와 배경 강조
                                             if (row.isAbnormal) {
                                                 rowStyle = "bg-red-50 hover:bg-red-100 border-2 border-red-400 relative z-10";
                                             } else if (row.groupPos) {
-                                                // 정상 그룹
                                                 if (row.groupPos === 'top') rowStyle = "bg-indigo-50 hover:bg-indigo-100 border-l-4 border-t border-r border-indigo-300 relative";
                                                 else if (row.groupPos === 'bottom') rowStyle = "bg-indigo-50 hover:bg-indigo-100 border-l-4 border-b border-r border-indigo-300 relative";
                                             }
