@@ -37,28 +37,35 @@
     <script type="text/babel">
         const { useState, useEffect } = React;
 
-        // --- Firebase 초기화 (안전장치 추가) ---
+        // -------------------------------------------------------
+        // [1] 파이어베이스 설정 (여기에 키를 붙여넣으세요)
+        // -------------------------------------------------------
+        const firebaseConfig = {
+            apiKey: "AIzaSyDOynSB64B-HiWIgydtZjttl_euQNRFbj8",
+            authDomain: "plus-manager-252ff.firebaseapp.com",
+            projectId: "plus-manager-252ff",
+            storageBucket: "plus-manager-252ff.firebasestorage.app",
+            messagingSenderId: "848792307018",
+            appId: "1:848792307018:web:353adc8b38e1a61d756db3",
+            measurementId: "G-7ZV16FCX8X"
+        };
+
+        // -------------------------------------------------------
+        // [2] 파이어베이스 초기화
+        // -------------------------------------------------------
         let auth = null;
         let db = null;
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
         try {
-            // __firebase_config가 정의되지 않았을 경우를 대비한 기본값 처리
-            const rawConfig = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
-            const firebaseConfig = JSON.parse(rawConfig);
-
-            // firebase 객체가 로드되었는지 확인 후 초기화
-            if (typeof firebase !== 'undefined' && firebaseConfig.apiKey) {
-                if (!firebase.apps.length) {
-                    firebase.initializeApp(firebaseConfig);
-                }
-                auth = firebase.auth();
-                db = firebase.firestore();
-            } else {
-                console.warn("Firebase configuration or SDK missing. App will run in offline/demo mode.");
+            if (!firebase.apps.length) {
+                firebase.initializeApp(firebaseConfig);
             }
+            auth = firebase.auth();
+            db = firebase.firestore();
+            console.log("파이어베이스 연결 성공!");
         } catch (error) {
-            console.error("Firebase initialization failed:", error);
+            console.error("파이어베이스 초기화 실패:", error);
+            alert("설정 키를 확인해주세요. 연결에 실패했습니다.");
         }
 
         // --- 아이콘 컴포넌트 ---
@@ -81,78 +88,66 @@
 
             // 입력 폼 상태
             const [formData, setFormData] = useState({
-                nickname: '',
-                userId: '',
-                email: '',
-                joinDate: '',
-                joinMethod: '',
-                joinStatus: '',
-                language: '',
-                reasonText: '',
-                files: [] // { name: string, data: base64 } 배열
+                nickname: '', userId: '', email: '', joinDate: '',
+                joinMethod: '', joinStatus: '', language: '',
+                reasonText: '', files: [] 
             });
 
             const [pasteText, setPasteText] = useState('');
 
-            // Firebase 인증
+            // Firebase 인증 (익명 로그인 사용)
             useEffect(() => {
-                if (!auth) return; // auth 객체가 없으면 중단
-
+                if (!auth) return;
                 const initAuth = async () => {
-                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                        await auth.signInWithCustomToken(__initial_auth_token);
-                    } else {
+                    try {
                         await auth.signInAnonymously();
+                    } catch(e) {
+                        console.error("로그인 실패 (Firebase Console에서 익명 로그인 허용했는지 확인하세요)", e);
                     }
                 };
                 initAuth();
                 return auth.onAuthStateChanged(setUser);
             }, []);
 
-            // 데이터 로드 (Firestore)
+            // 데이터 로드 (Firestore: 'blacklist' 컬렉션 사용)
             useEffect(() => {
                 if (!user || !db) return;
                 
-                const collectionRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('blacklist');
+                // 경로를 'blacklist'로 단순화했습니다.
+                const collectionRef = db.collection('blacklist');
                 
-                const unsubscribe = collectionRef.onSnapshot((snapshot) => {
+                const unsubscribe = collectionRef.orderBy("timestamp", "desc").onSnapshot((snapshot) => {
                     const items = [];
                     snapshot.forEach((doc) => {
                         items.push({ id: doc.id, ...doc.data() });
                     });
-                    // 최신 등록순 정렬 (timestamp가 없을 경우 대비)
-                    items.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
                     setList(items);
                 }, (err) => {
-                    console.error("Firestore Error:", err);
+                    console.error("Firestore 읽기 실패:", err);
                 });
 
                 return () => unsubscribe();
             }, [user]);
 
-            // 스마트 붙여넣기 로직 (닉네임 첫줄 + 불필요 항목 제거)
+            // 스마트 붙여넣기 로직
             const handleSmartPaste = () => {
                 if (!pasteText.trim()) return;
 
                 let parsedData = { ...formData };
                 let textToParse = pasteText.trim();
 
-                // 1. 줄 단위로 분리하여 첫 줄(닉네임) 처리
                 const lines = textToParse.split(/\r\n|\n|\r/);
                 
                 if (lines.length > 0) {
                     const firstLine = lines[0].trim();
-                    // 첫 줄이 '사용자 ID'로 시작하지 않으면 닉네임으로 간주
                     if (firstLine && !firstLine.startsWith("사용자 ID")) {
                         parsedData.nickname = firstLine;
-                        // 첫 줄 제외하고 나머지는 한 줄로 합쳐서 키워드 파싱 준비
                         textToParse = lines.slice(1).join(''); 
                     } else {
                         textToParse = lines.join('');
                     }
                 }
 
-                // 2. 정밀 파싱을 위한 전체 키워드 정의
                 const keys = [
                     { key: "사용자 ID", field: "userId" },
                     { key: "최근 활동 일시", field: null }, 
@@ -168,7 +163,6 @@
                     { key: "설정 언어", field: "language" }
                 ];
 
-                // 3. 키워드 기반 값 추출
                 for (let i = 0; i < keys.length; i++) {
                     const curr = keys[i];
                     const next = keys[i+1];
@@ -195,7 +189,6 @@
                     }
                 }
 
-                // 안전장치: 닉네임이 텍스트에 없었지만 사용자 ID가 있다면 임시 생성
                 if (!parsedData.nickname && parsedData.userId) {
                     parsedData.nickname = "User_" + parsedData.userId.substring(0, 5);
                 }
@@ -216,14 +209,14 @@
 
                 setLoading(true);
                 try {
-                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('blacklist').add({
+                    // 경로를 'blacklist'로 단순화했습니다.
+                    await db.collection('blacklist').add({
                         ...formData,
                         timestamp: firebase.firestore.FieldValue.serverTimestamp(),
                         registrar: user.uid
                     });
                     
                     alert("블랙리스트에 등록되었습니다.");
-                    // 초기화
                     setFormData({
                         nickname: '', userId: '', email: '', joinDate: '', joinMethod: '', 
                         joinStatus: '', language: '', reasonText: '', files: []
@@ -231,13 +224,12 @@
                     setStep(1);
                 } catch (e) {
                     console.error(e);
-                    alert("등록 중 오류가 발생했습니다 (파일 크기 제한 등).");
+                    alert("등록 실패! (원인: " + e.message + ")");
                 } finally {
                     setLoading(false);
                 }
             };
 
-            // 다중 파일 처리 로직
             const handleFileChange = async (e) => {
                 if (e.target.files) {
                     const fileList = Array.from(e.target.files);
@@ -247,7 +239,7 @@
                             reader.onloadend = () => {
                                 resolve({
                                     name: file.name,
-                                    data: reader.result // Base64 Data
+                                    data: reader.result 
                                 });
                             };
                             reader.readAsDataURL(file);
@@ -285,12 +277,10 @@
                                         {step > 1 && <button onClick={() => setStep(1)} className="text-xs text-blue-600 hover:underline">수정하기</button>}
                                     </div>
                                     <div className="space-y-3 text-sm">
-                                        {/* 1순위: 닉네임 */}
                                         <div>
                                             <label className="block text-gray-500 mb-1">닉네임 <span className="text-red-500">*</span></label>
                                             <input type="text" className="w-full p-2 border rounded bg-gray-50 font-bold text-gray-800" value={formData.nickname} onChange={(e) => setFormData({...formData, nickname: e.target.value})} placeholder="닉네임" disabled={step !== 1}/>
                                         </div>
-                                        {/* 2순위: 사용자 ID */}
                                         <div>
                                             <label className="block text-gray-500 mb-1">사용자 ID <span className="text-red-500">*</span></label>
                                             <input type="text" className="w-full p-2 border rounded bg-gray-50" value={formData.userId} onChange={(e) => setFormData({...formData, userId: e.target.value})} placeholder="U0P..." disabled={step !== 1}/>
@@ -321,7 +311,6 @@
                                     </div>
                                 )}
 
-                                {/* 확인 버튼 (Step 1) */}
                                 {step === 1 && (
                                     <button onClick={handleNextStep} className="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-bold shadow-md">확인 및 다음 단계</button>
                                 )}
