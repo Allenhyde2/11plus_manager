@@ -37,16 +37,29 @@
     <script type="text/babel">
         const { useState, useEffect } = React;
 
-        // --- Firebase 초기화 ---
-        const firebaseConfig = JSON.parse(__firebase_config);
-        
-        if (!firebase.apps.length) {
-            firebase.initializeApp(firebaseConfig);
-        }
-        
-        const auth = firebase.auth();
-        const db = firebase.firestore();
+        // --- Firebase 초기화 (안전장치 추가) ---
+        let auth = null;
+        let db = null;
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+        try {
+            // __firebase_config가 정의되지 않았을 경우를 대비한 기본값 처리
+            const rawConfig = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
+            const firebaseConfig = JSON.parse(rawConfig);
+
+            // firebase 객체가 로드되었는지 확인 후 초기화
+            if (typeof firebase !== 'undefined' && firebaseConfig.apiKey) {
+                if (!firebase.apps.length) {
+                    firebase.initializeApp(firebaseConfig);
+                }
+                auth = firebase.auth();
+                db = firebase.firestore();
+            } else {
+                console.warn("Firebase configuration or SDK missing. App will run in offline/demo mode.");
+            }
+        } catch (error) {
+            console.error("Firebase initialization failed:", error);
+        }
 
         // --- 아이콘 컴포넌트 ---
         const Icon = ({ children, className }) => (
@@ -58,7 +71,6 @@
         const CheckCircle = () => <Icon><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" /></Icon>;
         const AlertOctagon = () => <Icon><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></Icon>;
         const DownloadIcon = () => <Icon><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></Icon>;
-        const Paperclip = () => <Icon><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></Icon>;
 
         // --- 메인 컴포넌트 ---
         const BlacklistManager = () => {
@@ -84,6 +96,8 @@
 
             // Firebase 인증
             useEffect(() => {
+                if (!auth) return; // auth 객체가 없으면 중단
+
                 const initAuth = async () => {
                     if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                         await auth.signInWithCustomToken(__initial_auth_token);
@@ -97,18 +111,23 @@
 
             // 데이터 로드 (Firestore)
             useEffect(() => {
-                if (!user) return;
+                if (!user || !db) return;
+                
                 const collectionRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('blacklist');
                 
-                return collectionRef.onSnapshot((snapshot) => {
+                const unsubscribe = collectionRef.onSnapshot((snapshot) => {
                     const items = [];
                     snapshot.forEach((doc) => {
                         items.push({ id: doc.id, ...doc.data() });
                     });
-                    // 최신 등록순 정렬
+                    // 최신 등록순 정렬 (timestamp가 없을 경우 대비)
                     items.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
                     setList(items);
+                }, (err) => {
+                    console.error("Firestore Error:", err);
                 });
+
+                return () => unsubscribe();
             }, [user]);
 
             // 스마트 붙여넣기 로직 (닉네임 첫줄 + 불필요 항목 제거)
@@ -134,7 +153,6 @@
                 }
 
                 // 2. 정밀 파싱을 위한 전체 키워드 정의
-                // field가 null인 것은 데이터를 추출하지 않고 건너뛰기 위한 구분자
                 const keys = [
                     { key: "사용자 ID", field: "userId" },
                     { key: "최근 활동 일시", field: null }, 
@@ -163,19 +181,15 @@
 
                     if (next) {
                         const endIdx = textToParse.indexOf(next.key);
-                        // 다음 키워드가 존재하고, 현재 키워드 뒤에 있다면 그 사이 문자열 추출
                         if (endIdx !== -1 && endIdx > valStart) {
                             val = textToParse.substring(valStart, endIdx);
                         } else {
-                            // 다음 키워드를 못 찾았으면 끝까지
                             val = textToParse.substring(valStart);
                         }
                     } else {
-                        // 마지막 키워드인 경우
                         val = textToParse.substring(valStart);
                     }
 
-                    // field가 있는 경우만 저장 (불필요 항목 제거됨)
                     if (curr.field) {
                         parsedData[curr.field] = val.trim();
                     }
@@ -198,7 +212,7 @@
 
             const handleSubmit = async () => {
                 if (!formData.reasonText) return alert("블랙리스트 등록 사유를 입력해주세요.");
-                if (!user) return;
+                if (!user || !db) return alert("서버 연결에 실패했습니다.");
 
                 setLoading(true);
                 try {
@@ -240,7 +254,6 @@
                         });
                     });
                     const fileObjects = await Promise.all(readPromises);
-                    // 기존 파일에 추가하는 방식이 아니라 교체하는 방식 (필요시 [...prev, ...new] 로 변경 가능)
                     setFormData({ ...formData, files: fileObjects });
                 }
             };
