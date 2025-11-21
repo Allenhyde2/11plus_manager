@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>포인트 자산 관리장 (이상 거래 탐지)</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel (JSX 컴파일용) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif; }
+        /* 스크롤 이동 시 강조 효과 애니메이션 */
+        @keyframes highlight-pulse {
+            0%, 100% { background-color: rgb(254 226 226); } /* red-100 */
+            50% { background-color: rgb(252 165 165); } /* red-300 */
+        }
+        .highlight-row {
+            animation: highlight-pulse 2s ease-in-out infinite;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- 아이콘 컴포넌트 ---
+        const IconBase = ({ children, size = 24, className = "", ...props }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} {...props}>
+                {children}
+            </svg>
+        );
+
+        const Upload = (props) => (<IconBase {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></IconBase>);
+        const Clock = (props) => (<IconBase {...props}><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></IconBase>);
+        const FileText = (props) => (<IconBase {...props}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><polyline points="10 9 9 9 8 9" /></IconBase>);
+        const Heart = ({ fill, ...props }) => (<IconBase {...props} fill={fill || "none"}><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" /></IconBase>);
+        const Trophy = ({ fill, ...props }) => (<IconBase {...props} fill={fill || "none"}><path d="M8 21h8" /><path d="M12 17v4" /><path d="M7 4h10" /><path d="M18 4a3 3 0 0 0-3 3v6a3 3 0 0 0 3 3" /><path d="M6 4a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3" /><rect x="9" y="4" width="6" height="10" rx="1" /></IconBase>);
+        const Calculator = (props) => (<IconBase {...props}><rect x="4" y="2" width="16" height="20" rx="2" /><line x1="8" y1="6" x2="16" y2="6" /><line x1="16" y1="14" x2="16" y2="14" /><line x1="8" y1="14" x2="8" y2="14" /><line x1="12" y1="14" x2="12" y2="14" /><line x1="16" y1="18" x2="16" y2="18" /><line x1="8" y1="18" x2="8" y2="18" /><line x1="12" y1="18" x2="12" y2="18" /></IconBase>);
+        const LinkIcon = (props) => (<IconBase {...props}><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></IconBase>);
+        const Trash2 = (props) => (<IconBase {...props}><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></IconBase>);
+        const AlertTriangle = (props) => (<IconBase {...props}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></IconBase>);
+
+        // --- 메인 컴포넌트 ---
+        const UnifiedPointDashboard = () => {
+            const [data, setData] = useState([]);
+            const [abnormalList, setAbnormalList] = useState([]);
+
+            // 초기 샘플 데이터 (테스트용)
+            const initialSampleData = [
+                { id: 'UVHS3G0LP', name: 'goblin', date: '2025-11-20 03:34:33', type: 'Heart', amount: 300, category: '지급', adminMsg: '11+', additionalDesc: 'Berhasil Menyerang Blok' },
+                
+                // [정상] 하트 지출(-5000) : 트로피 획득(500) => 10:1 비율 OK
+                { id: 'UVHS3G0LP', name: 'goblin', date: '2025-11-20 04:00:00', type: 'Heart', amount: -5000, category: '사용', adminMsg: 'Penukaran Poin', additionalDesc: '정상 교환' },
+                { id: 'UVHS3G0LP', name: 'goblin', date: '2025-11-20 04:00:00', type: 'Trophy', amount: 500, category: '지급', adminMsg: '수령: Penukaran Poin', additionalDesc: '정상 교환' },
+                
+                // [비정상] 트로피 지출(-10) : 하트 획득(50) => 1:7 비율 위반 (정상은 70이어야 함)
+                { id: 'UVHS3G0LP', name: 'goblin', date: '2025-11-20 05:00:00', type: 'Heart', amount: 50, category: '지급', adminMsg: '수령: Penukaran Poin', additionalDesc: '비정상 교환(비율깨짐)' },
+                { id: 'UVHS3G0LP', name: 'goblin', date: '2025-11-20 05:00:00', type: 'Trophy', amount: -10, category: '사용', adminMsg: 'Penukaran Poin', additionalDesc: '비정상 교환' },
+
+                // [비정상] 하트 지출(-100) : 트로피 획득(100) => 10:1 비율 위반 (정상은 10이어야 함)
+                { id: 'UVHS3G0LP', name: 'goblin', date: '2025-11-20 06:00:00', type: 'Heart', amount: -100, category: '사용', adminMsg: 'Exchange', additionalDesc: '비정상' },
+                { id: 'UVHS3G0LP', name: 'goblin', date: '2025-11-20 06:00:00', type: 'Trophy', amount: 100, category: '지급', adminMsg: 'Exchange', additionalDesc: '비정상' },
+            ];
+
+            useEffect(() => {
+                processAndSetData(initialSampleData);
+            }, []);
+
+            // 잔액 계산 (시간순)
+            const calculateBalances = (rows) => {
+                const sortedAsc = [...rows].sort((a, b) => new Date(a.date) - new Date(b.date));
+                let hBalance = 0;
+                let tBalance = 0;
+
+                return sortedAsc.map(row => {
+                    if (row.type === 'Heart') {
+                        hBalance += row.amount;
+                    } else if (row.type === 'Trophy') {
+                        tBalance += row.amount;
+                    }
+                    return { ...row, heartBalance: hBalance, trophyBalance: tBalance };
+                });
+            };
+
+            // 핵심 그룹핑 & 비정상 비율 검증 로직
+            const identifyPairs = (rows) => {
+                const result = [];
+                const pairKeywords = ['penukaran', 'exchange', '교환'];
+                
+                let i = 0;
+                while (i < rows.length) {
+                    const current = rows[i];
+                    const next = rows[i + 1];
+
+                    let isPaired = false;
+
+                    if (next) {
+                        // 1. 키워드 검증
+                        const currText = (current.adminMsg + (current.additionalDesc || '')).toLowerCase().replace(/\s+/g, '');
+                        const nextText = (next.adminMsg + (next.additionalDesc || '')).toLowerCase().replace(/\s+/g, '');
+                        
+                        const hasKeyword = pairKeywords.some(k => currText.includes(k)) && pairKeywords.some(k => nextText.includes(k));
+
+                        // 2. 반대 부호 검증
+                        const isOpposite = (current.amount > 0 && next.amount < 0) || (current.amount < 0 && next.amount > 0);
+
+                        // 3. 지출/획득 행 식별
+                        const expenseRow = current.amount < 0 ? current : next;
+                        const incomeRow = current.amount > 0 ? current : next;
+                        
+                        // 4. 타입 교차 검증
+                        const isValidPairType = 
+                            (expenseRow.type === 'Heart' && incomeRow.type === 'Trophy') ||
+                            (expenseRow.type === 'Trophy' && incomeRow.type === 'Heart');
+
+                        if (hasKeyword && isOpposite && isValidPairType) {
+                            // --- 비율 검증 로직 추가 ---
+                            let isAbnormal = false;
+                            const expenseAmt = Math.abs(expenseRow.amount);
+                            const incomeAmt = incomeRow.amount;
+
+                            if (expenseRow.type === 'Heart' && incomeRow.type === 'Trophy') {
+                                // Rule: Heart 10개 지출 -> Trophy 1개 획득 (10:1)
+                                // 즉, Heart 지출량 == Trophy 획득량 * 10
+                                if (expenseAmt !== incomeAmt * 10) {
+                                    isAbnormal = true;
+                                }
+                            } else if (expenseRow.type === 'Trophy' && incomeRow.type === 'Heart') {
+                                // Rule: Trophy 1개 지출 -> Heart 7개 획득 (1:7)
+                                // 즉, Heart 획득량 == Trophy 지출량 * 7
+                                if (incomeAmt !== expenseAmt * 7) {
+                                    isAbnormal = true;
+                                }
+                            }
+
+                            // 짝이 맞으면 지출(위), 획득(아래)로 정렬해서 추가
+                            // isAbnormal 플래그 전파
+                            result.push({ ...expenseRow, groupPos: 'top', isAbnormal });
+                            result.push({ ...incomeRow, groupPos: 'bottom', isAbnormal });
+                            
+                            isPaired = true;
+                            i += 2; 
+                        }
+                    }
+
+                    if (!isPaired) {
+                        result.push({ ...current, groupPos: null });
+                        i++;
+                    }
+                }
+                return result;
+            };
+
+            const processAndSetData = (rawData) => {
+                const calculatedData = calculateBalances(rawData);
+                
+                const sorted = [...calculatedData].sort((a, b) => {
+                    return new Date(a.date) - new Date(b.date);
+                });
+
+                const groupedData = identifyPairs(sorted);
+                setData(groupedData);
+
+                // 비정상 내역 리스트 추출 (지출 행만 대표로 추출)
+                const abnormals = groupedData.filter(d => d.groupPos === 'top' && d.isAbnormal);
+                setAbnormalList(abnormals);
+            };
+
+            const handleReset = () => {
+                setData([]);
+                setAbnormalList([]);
+            };
+
+            // 스크롤 이동 함수
+            const scrollToRow = (idx) => {
+                const element = document.getElementById(`row-${idx}`);
+                if (element) {
+                    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    element.classList.add('highlight-row');
+                    setTimeout(() => {
+                        element.classList.remove('highlight-row');
+                    }, 3000);
+                }
+            };
+
+            const handleFileUpload = (event) => {
+                const files = Array.from(event.target.files);
+                const newRows = [];
+                let processedCount = 0;
+
+                files.forEach(file => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const text = e.target.result;
+                        const rows = text.split(/\r\n|\n|\r/).slice(1); 
+                        
+                        rows.forEach(row => {
+                            if (!row.trim()) return;
+                            const cols = row.split(',').map(c => c.trim());
+                            if (cols.length < 5) return;
+
+                            const date = cols[2];
+                            const typeRaw = (cols[3] || '').trim();
+                            const amountRaw = parseFloat(cols[5]);
+                            const categoryRaw = cols[6];
+                            const adminMsgRaw = cols[8] || '';
+                            const additionalDescRaw = cols[9] || '';
+
+                            let normalizedType = 'Unknown';
+                            if (typeRaw.includes('Heart')) normalizedType = 'Heart';
+                            else if (typeRaw.includes('Trophy')) normalizedType = 'Trophy';
+                            
+                            if (normalizedType === 'Unknown') {
+                                const fileNameLower = file.name.toLowerCase();
+                                if (fileNameLower.includes('heart')) normalizedType = 'Heart';
+                                else if (fileNameLower.includes('trophy')) normalizedType = 'Trophy';
+                            }
+
+                            newRows.push({
+                                id: cols[0],
+                                name: cols[1],
+                                date: date,
+                                type: normalizedType,
+                                amount: amountRaw,
+                                category: categoryRaw,
+                                adminMsg: adminMsgRaw,
+                                additionalDesc: additionalDescRaw
+                            });
+                        });
+
+                        processedCount++;
+                        if (processedCount === files.length) {
+                            const existingRaw = data.map(({heartBalance, trophyBalance, groupPos, isAbnormal, ...rest}) => rest);
+                            const combined = [...existingRaw, ...newRows];
+                            processAndSetData(combined);
+                        }
+                    };
+                    reader.readAsText(file);
+                });
+                event.target.value = '';
+            };
+
+            const formatNumber = (num) => Math.abs(num).toLocaleString();
+            const formatBalance = (num) => num?.toLocaleString() || '0';
+
+            return (
+                <div className="p-6 max-w-7xl mx-auto bg-gray-50 min-h-screen font-sans text-gray-800">
+                    
+                    {/* 비정상 거래 감지 배너 */}
+                    {abnormalList.length > 0 && (
+                        <div className="mb-6 bg-red-50 border border-red-200 rounded-xl p-4 animate-pulse-slow">
+                            <div className="flex items-center gap-2 mb-3 text-red-700 font-bold">
+                                <AlertTriangle className="w-6 h-6" />
+                                <span>비정상 교환 비율 감지됨 ({abnormalList.length}건)</span>
+                            </div>
+                            <div className="space-y-2 max-h-40 overflow-y-auto pr-2">
+                                {abnormalList.map((item, i) => {
+                                    // 해당 아이템의 인덱스를 전체 데이터에서 찾기
+                                    const realIdx = data.findIndex(d => d === item);
+                                    return (
+                                        <button 
+                                            key={i}
+                                            onClick={() => scrollToRow(realIdx)}
+                                            className="w-full text-left flex items-center justify-between p-2 bg-white rounded border border-red-100 hover:bg-red-100 transition text-sm"
+                                        >
+                                            <span className="flex items-center gap-2">
+                                                <span className="font-mono text-gray-500">{item.date}</span>
+                                                <span className="font-medium text-gray-700">
+                                                    {item.type === 'Heart' ? 'Heart' : 'Trophy'} 지출
+                                                    <span className="mx-1 text-gray-400">-></span>
+                                                    획득 비율 오류
+                                                </span>
+                                            </span>
+                                            <span className="text-xs text-blue-600 font-medium">이동 &rarr;</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="mb-8 bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                        <h1 className="text-2xl font-bold mb-2 flex items-center gap-2 text-gray-800">
+                            <Calculator className="w-6 h-6 text-blue-600" />
+                            포인트 자산 관리장
+                        </h1>
+                        <div className="flex justify-between items-end">
+                            <div className="text-gray-500 text-sm space-y-1">
+                                <p>정렬 기준: <strong>과거 → 현재 (오름차순) 고정</strong></p>
+                                <p>교환 규칙: <strong>Heart 10 : 1 Trophy</strong> | <strong>Trophy 1 : 7 Heart</strong></p>
+                                <p className="text-xs text-gray-400">* 그룹핑 및 비정상 비율 자동 감지</p>
+                            </div>
+                        </div>
+
+                        <div className="mt-6 flex flex-wrap gap-4 items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <div className="relative">
+                                    <input type="file" multiple accept=".csv" onChange={handleFileUpload} className="hidden" id="file-upload" />
+                                    <label htmlFor="file-upload" className="cursor-pointer flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition shadow-sm">
+                                        <Upload size={18} /> CSV 파일 업로드
+                                    </label>
+                                </div>
+                                {data.length > 0 && (
+                                    <button onClick={handleReset} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition shadow-sm">
+                                        <Trash2 size={18} /> 초기화
+                                    </button>
+                                )}
+                            </div>
+                            <div className="px-3 py-1.5 bg-gray-100 text-gray-500 text-sm rounded-md font-medium flex items-center gap-1">
+                                <Clock size={14} /> 과거순 보기 적용됨
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* 데이터 요약 카드 */}
+                    {data.length > 0 && (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                            <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center">
+                                <div className="flex items-center gap-2 mb-1">
+                                    <div className="p-2 bg-blue-50 text-blue-600 rounded-full"><FileText size={16} /></div>
+                                    <span className="text-sm text-gray-500">총 내역</span>
+                                </div>
+                                <p className="text-2xl font-bold text-gray-800 ml-1">{data.length} 건</p>
+                            </div>
+                            <div className="bg-pink-50 p-4 rounded-xl shadow-sm border border-pink-100 flex flex-col">
+                                <div className="flex items-center gap-2 mb-1">
+                                    <div className="p-2 bg-white text-pink-500 rounded-full shadow-sm"><Heart size={16} fill="currentColor" /></div>
+                                    <span className="text-sm text-pink-700">최종 Heart 잔액</span>
+                                </div>
+                                <p className="text-2xl font-bold text-pink-900 ml-1">
+                                    {(() => { const last = data[data.length - 1]; return formatBalance(last?.heartBalance); })()}
+                                </p>
+                            </div>
+                            <div className="bg-yellow-50 p-4 rounded-xl shadow-sm border border-yellow-100 flex flex-col">
+                                <div className="flex items-center gap-2 mb-1">
+                                    <div className="p-2 bg-white text-yellow-500 rounded-full shadow-sm"><Trophy size={16} fill="currentColor" /></div>
+                                    <span className="text-sm text-yellow-700">최종 Trophy 잔액</span>
+                                </div>
+                                <p className="text-2xl font-bold text-yellow-900 ml-1">
+                                    {(() => { const last = data[data.length - 1]; return formatBalance(last?.trophyBalance); })()}
+                                </p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 테이블 영역 */}
+                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm text-left border-collapse">
+                                <thead className="bg-gray-100 text-gray-600 font-medium border-b border-gray-200">
+                                    <tr>
+                                        <th className="px-6 py-4 w-40">발생 일시</th>
+                                        <th className="px-4 py-4 w-24 text-center">유형</th>
+                                        <th className="px-4 py-4">내용</th>
+                                        <th className="px-4 py-4 w-28 text-right border-l border-gray-200 text-blue-600">지급 (Income)</th>
+                                        <th className="px-4 py-4 w-28 text-right border-l border-gray-200 text-red-600">지출 (Expense)</th>
+                                        <th className="px-6 py-4 w-48 text-left border-l border-gray-200 text-gray-700 bg-gray-50">보유 잔액 (Total Balance)</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                    {data.length === 0 ? (
+                                        <tr><td colSpan="6" className="text-center py-20 text-gray-400">데이터가 없습니다.</td></tr>
+                                    ) : (
+                                        data.map((row, idx) => {
+                                            const isIncome = row.amount > 0;
+                                            const absAmount = Math.abs(row.amount);
+                                            
+                                            let cellClass = "";
+                                            if (row.type === 'Heart') cellClass = "bg-pink-100 text-pink-900 font-medium";
+                                            else if (row.type === 'Trophy') cellClass = "bg-yellow-100 text-yellow-800 font-medium";
+
+                                            // 그룹핑 및 비정상 거래 스타일링
+                                            let rowStyle = "hover:bg-gray-50 transition-colors";
+                                            let groupIndicator = null;
+                                            
+                                            // 비정상 거래일 경우 붉은 테두리와 배경 강조
+                                            if (row.isAbnormal) {
+                                                rowStyle = "bg-red-50 hover:bg-red-100 border-2 border-red-400 relative z-10";
+                                            } else if (row.groupPos) {
+                                                // 정상 그룹
+                                                if (row.groupPos === 'top') rowStyle = "bg-indigo-50 hover:bg-indigo-100 border-l-4 border-t border-r border-indigo-300 relative";
+                                                else if (row.groupPos === 'bottom') rowStyle = "bg-indigo-50 hover:bg-indigo-100 border-l-4 border-b border-r border-indigo-300 relative";
+                                            }
+
+                                            if (row.groupPos === 'top') {
+                                                groupIndicator = (
+                                                    <div className={`absolute -left-2.5 top-1/2 translate-y-4 z-20 rounded-full p-1.5 border-2 border-white shadow-md text-white ${row.isAbnormal ? 'bg-red-500' : 'bg-indigo-500'}`}>
+                                                        {row.isAbnormal ? <AlertTriangle size={14} /> : <LinkIcon size={14} />}
+                                                    </div>
+                                                );
+                                            }
+
+                                            return (
+                                                <tr key={idx} id={`row-${idx}`} className={rowStyle}>
+                                                    <td className="px-6 py-3 text-gray-500 whitespace-nowrap text-xs relative">
+                                                        {row.groupPos === 'top' && groupIndicator}
+                                                        {row.date}
+                                                    </td>
+                                                    <td className="px-4 py-3 text-center">
+                                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                                            row.type === 'Heart' ? 'bg-pink-50 text-pink-700 border border-pink-200' : 
+                                                            row.type === 'Trophy' ? 'bg-yellow-50 text-yellow-700 border border-yellow-200' : 'bg-gray-100'
+                                                        }`}>
+                                                            {row.type === 'Heart' ? <Heart size={10} className="mr-1" /> : <Trophy size={10} className="mr-1" />}
+                                                            {row.type}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-4 py-3 max-w-xs truncate">
+                                                        <div className="flex flex-col">
+                                                            <span className="text-gray-900 font-medium text-sm truncate" title={row.adminMsg}>{row.adminMsg}</span>
+                                                            {row.additionalDesc && <span className="text-gray-500 text-xs truncate mt-0.5" title={row.additionalDesc}>{row.additionalDesc}</span>}
+                                                            {row.isAbnormal && <span className="text-red-600 text-xs font-bold mt-1 flex items-center gap-1"><AlertTriangle size={10}/> 비율 오류 확인 필요</span>}
+                                                        </div>
+                                                    </td>
+                                                    <td className={`px-4 py-3 text-right border-l border-gray-100 ${isIncome ? cellClass : ''}`}>
+                                                        {isIncome ? `+${formatNumber(absAmount)}` : <span className="text-gray-300">-</span>}
+                                                    </td>
+                                                    <td className={`px-4 py-3 text-right border-l border-gray-100 ${!isIncome ? cellClass : ''}`}>
+                                                        {!isIncome ? `-${formatNumber(absAmount)}` : <span className="text-gray-300">-</span>}
+                                                    </td>
+                                                    <td className="px-6 py-3 border-l border-gray-200 bg-gray-50/50">
+                                                        <div className="flex flex-col gap-1">
+                                                            <div className={`flex items-center justify-between text-xs ${row.type === 'Heart' ? 'font-bold text-pink-700' : 'text-gray-400'}`}>
+                                                                <span className="flex items-center gap-1"><Heart size={10} fill="currentColor"/> Heart</span>
+                                                                <span>{formatBalance(row.heartBalance)}</span>
+                                                            </div>
+                                                            <div className={`flex items-center justify-between text-xs ${row.type === 'Trophy' ? 'font-bold text-yellow-700' : 'text-gray-400'}`}>
+                                                                <span className="flex items-center gap-1"><Trophy size={10} fill="currentColor"/> Trophy</span>
+                                                                <span>{formatBalance(row.trophyBalance)}</span>
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<UnifiedPointDashboard />);
+    </script>
+</body>
+</html>
